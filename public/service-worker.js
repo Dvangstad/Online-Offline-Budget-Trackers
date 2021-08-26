@@ -9,64 +9,72 @@ const FILES_TO_CACHE = [
     "./manifest.json",
     "./icons/icon-192x192.png",
     "./icons/icon-512x512.png",
-]
+];
 
-self.addEventListener("install", (event) => {
-    event.waitUntil(
-        caches.open(CACHE_NAME).then(cache => {
-            return cache.addAll(FILES_TO_CACHE)
-        })
-    )
+// install
+self.addEventListener("install", function (evt) {
+    // pre cache image data
+    evt.waitUntil(
+        caches.open(DATA_CACHE_NAME).then((cache) => cache.add("/api/images"))
+    );
+
+    // pre cache all static assets
+    evt.waitUntil(
+        caches.open(CACHE_NAME).then((cache) => cache.addAll(FILES_TO_CACHE))
+    );
+
+    // tell the browser to activate this service worker immediately once it
+    // has finished installing
+    self.skipWaiting();
 });
 
-self.addEventListener("fetch", (event) => {
-    if(event.request.url.includes("/api/")) {
-        event.respondWith(
+// activate
+self.addEventListener("activate", function (evt) {
+    evt.waitUntil(
+        caches.keys().then(keyList => {
+            return Promise.all(
+                keyList.map(key => {
+                    if (key !== CACHE_NAME && key !== DATA_CACHE_NAME) {
+                        console.log("Removing old cache data", key);
+                        return caches.delete(key);
+                    }
+                })
+            );
+        })
+    );
+
+    self.clients.claim();
+});
+
+// fetch
+self.addEventListener("fetch", function (evt) {
+    if (evt.request.url.includes("/api/")) {
+        evt.respondWith(
             caches.open(DATA_CACHE_NAME).then(cache => {
-                return fetch(event.request)
+                return fetch(evt.request)
                     .then(response => {
-                        if(response.status === 200){
-                            cache.put(event.request.url, response.clone());
+                        // If the response was good, clone it and store it in the cache.
+                        if (response.status === 200) {
+                            cache.put(evt.request.url, response.clone());
                         }
 
                         return response;
                     })
                     .catch(err => {
-                        return cache.match(event.request)
-                    })
+                        // Network request failed, try to get it from the cache.
+                        return cache.match(evt.request);
+                    });
             }).catch(err => console.log(err))
-        )
+        );
 
-        return
+        return;
     }
 
-    event.respondWith(
-        fetch(event.request).catch(() => {
-            return caches.match(event.request).then(response => {
-                if(response){
-                    return response
-                }else if (event.request.headers.get("accept").includes("text/html")) {
-                    return caches.match("/")
-                }
-            })
+    evt.respondWith(
+        caches.open(CACHE_NAME).then(cache => {
+            return cache.match(evt.request).then(response => {
+                return response || fetch(evt.request);
+            });
         })
-    )
-})
-
-self.addEventListener('activate', (e) => {
-    e.waitUntil(
-        caches.keys().then(function (keyList) {
-            let cacheKeeplist = keyList.filter(function(key) {
-                return key.indexOf(CACHE_NAME)
-            })
-            cacheKeeplist.push(CACHE_NAME)
-
-            return Promise.all(keyList.map(function(key, i) {
-                if(cacheKeeplist.indexOf(key) === -1) {
-                    console.log("delete")
-                    return caches.delete(keyList[i])
-                }
-            }))
-        })
-    )
-})
+    );
+});
